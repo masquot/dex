@@ -11,7 +11,8 @@ CREATE TABLE dex.liquidity (
     token_contract_address bytea NOT NULL,
     pool_address bytea NOT NULL,
     token_index text,
-    token_pool_percentage numeric
+    token_pool_percentage numeric,
+    row_id integer
 );
 
 -- :todo: indexes
