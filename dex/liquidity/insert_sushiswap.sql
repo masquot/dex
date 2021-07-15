@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION dex.insert_liquidity_uniswap(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
+CREATE OR REPLACE FUNCTION dex.insert_liquidity_sushi(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
 LANGUAGE plpgsql AS $function$
 DECLARE r integer;
 BEGIN
@@ -16,8 +16,8 @@ dex_wallet_balances AS (
              ELSE 'token_x'
         END AS token_index
     FROM erc20.token_balances balances
-    INNER JOIN uniswap_v2."Factory_evt_PairCreated" dex ON (balances.token_address = dex.token0 OR balances.token_address = dex.token1) AND dex.pair = balances.wallet_address
-    WHERE EXISTS (SELECT * FROM uniswap_v2."Pair_evt_Swap" swap WHERE swap.evt_block_time > now() - interval '1week' AND balances.wallet_address = swap.contract_address)
+    INNER JOIN sushi."Factory_evt_PairCreated" dex ON (balances.token_address = dex.token0 OR balances.token_address = dex.token1) AND dex.pair = balances.wallet_address
+    WHERE EXISTS (SELECT * FROM sushi."Pair_evt_Swap" swap WHERE swap.evt_block_time > now() - interval '1week' AND balances.wallet_address = swap.contract_address)
 ),
 balances AS (
     SELECT
@@ -60,37 +60,19 @@ rows AS (
         token_index,
         token_pool_percentage
     FROM (
-        -- Uniswap v1 TokenPurchase
-        -- :todo:
-
-        UNION ALL
-
-        -- Uniswap v1 EthPurchase
-        -- :todo:
-
-        UNION ALL
-        -- Uniswap v2
+        -- Sushi v1
         SELECT
             d.day,
-            'Uniswap' AS project,
-            '2' AS version,
+            'Sushiswap' AS project,
+            '1' AS version,
             'DEX' AS category,
             balances.amount_raw AS token_amount_raw,
             balances.token_address,
             balances.wallet_address AS pool_address,
             balances.token_index,
-            0.5 AS token_pool_percentage -- :todo: :research: is this always 0.5 for uniswap_v2 ?
+            0.5 AS token_pool_percentage -- :todo: :research: is this always 0.5 for sushi ?
         FROM balances
         INNER JOIN days d ON balances.day <= d.day AND d.day < balances.next_day
-        WHERE balances.wallet_address NOT IN (
-            '\xed9c854cb02de75ce4c9bba992828d6cb7fd5c71', -- remove WETH-UBOMB wash trading pair
-            '\x854373387e41371ac6e307a1f29603c6fa10d872' ) -- remove FEG/ETH token pair
-
-
-        UNION ALL
-        --Uniswap v3
-        -- :todo:
-
     ) dexs
     LEFT JOIN erc20.tokens erc20 on erc20.contract_address = dexs.token_address
     LEFT JOIN prices.usd p on p.contract_address = dexs.token_address and p.minute = dexs.day
@@ -103,21 +85,8 @@ RETURN r;
 END
 $function$;
 
--- fill 2019
-SELECT dex.insert_liquidity_uniswap(
-    '2019-01-01',
-    '2020-01-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day > '2019-01-01'
-    AND day <= '2020-01-01'
-    AND project = 'Uniswap'
-);
-
 -- fill 2020
-SELECT dex.insert_liquidity_uniswap(
+SELECT dex.insert_liquidity_sushi(
     '2020-01-01',
     '2021-01-01'
 )
@@ -126,11 +95,11 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day > '2020-01-01'
     AND day <= '2021-01-01'
-    AND project = 'Uniswap'
+    AND project = 'Sushiswap'
 );
 
--- fill 2021 :todo: maybe split 2021 in two periods
-SELECT dex.insert_liquidity_uniswap(
+-- fill 2021
+SELECT dex.insert_liquidity_sushi(
     '2021-01-01',
     now()
 )
@@ -139,13 +108,13 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day > '2021-01-01'
     AND day <= now() - interval '20 minutes'
-    AND project = 'Uniswap'
+    AND project = 'Sushiswap'
 );
 
 INSERT INTO cron.job (schedule, command)
 VALUES ('*/10 * * * *', $$
-    SELECT dex.insert_liquidity_uniswap(
-        (SELECT max(day) - interval '1 days' FROM dex.liquidity WHERE project='Uniswap'),
+    SELECT dex.insert_liquidity_sushi(
+        (SELECT max(day) - interval '1 days' FROM dex.liquidity WHERE project='Sushiswap'),
         (SELECT now() - interval '20 minutes');
 $$)
 ON CONFLICT (command) DO UPDATE SET schedule=EXCLUDED.schedule;
