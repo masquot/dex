@@ -14,11 +14,10 @@ CREATE TABLE dex.liquidity (
     token_pool_percentage numeric
 );
 
--- :todo: indexes
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS dex_liquidity_platform_tx_hash_evt_index_uniq_idx ON dex.liquidity (platform, tx_hash, evt_index);
-CREATE INDEX IF NOT EXISTS dex_liquidity_block_time_idx ON dex.liquidity USING BRIN (block_time);
-CREATE INDEX IF NOT EXISTS dex_liquidity_seller_idx ON dex.liquidity (seller);
-CREATE INDEX IF NOT EXISTS dex_liquidity_buyer_idx ON dex.liquidity (buyer);
-CREATE INDEX IF NOT EXISTS dex_liquidity_nft_project_name_nft_token_id_block_time_idx ON dex.liquidity (nft_project_name, nft_token_id, block_time)
--- overkill ?
-CREATE INDEX IF NOT EXISTS dex_liquidity_block_time_platform_seller_buyer_nft_project_name_nft_token_id_idx ON dex.liquidity (block_time, platform, seller, buyer, nft_project_name, nft_token_id)
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS dex_liquidity_day_pool_address_token_address_uniq_idx ON dex.liquidity (day, pool_address, token_address);
+CREATE INDEX IF NOT EXISTS dex_liquidity_day_idx ON dex.liquidity USING BRIN (day);
+CREATE INDEX IF NOT EXISTS dex_liquidity_token_address_idx ON dex.liquidity (token_address);
+CREATE INDEX IF NOT EXISTS dex_liquidity_pool_address_idx ON dex.liquidity (pool_address);
+CREATE INDEX IF NOT EXISTS dex_liquidity_day_pool_address_project_version_pool_name_idx ON dex.liquidity (day, pool_address, project, version, pool_name)
+-- overkill
+CREATE INDEX IF NOT EXISTS dex_liquidity_day_token_address_token_symbol_pool_address_project_version_pool_name_idx ON dex.liquidity (day, token_address, token_symbol, pool_address, project, version, pool_name)
