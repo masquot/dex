@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION dex.insert_liquidity_uniswap_v2(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
+CREATE OR REPLACE FUNCTION dex.insert_liquidity_uniswap_v3(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
 LANGUAGE plpgsql AS $function$
 DECLARE r integer;
 BEGIN
@@ -16,11 +16,9 @@ dex_wallet_balances AS (
              ELSE 'token_x'
         END AS token_index
     FROM erc20.token_balances balances
-    INNER JOIN uniswap_v2."Factory_evt_PairCreated" dex ON (balances.token_address = dex.token0 OR balances.token_address = dex.token1) AND dex.pair = balances.wallet_address
+    INNER JOIN uniswap_v3."Factory_evt_PoolCreated" dex ON (balances.token_address = dex.token0 OR balances.token_address = dex.token1) AND dex.pool = balances.wallet_address
     WHERE balances.timestamp >= start_ts AND balances.timestamp < end_ts
     UNION ALL
-    -- get the latest entries from `dex.liquidity` as a starting point to avoid expensive recalculations
-    -- going back 3 extra days in time to be on the safe side if previous day was not correctly updated
     SELECT
         pool_address,
         token_address,
@@ -28,7 +26,7 @@ dex_wallet_balances AS (
         liq.day,
         token_index
     FROM dex.liquidity liq
-    WHERE project = 'Uniswap' AND version = '2' AND liq.day >= start_ts - interval '3 days'
+    WHERE project = 'Uniswap' AND version = '3' AND liq.day >= start_ts - interval '3 days'
 ),
 balances AS (
     SELECT
@@ -60,7 +58,7 @@ rows AS (
         day,
         erc20.symbol AS token_symbol,
         token_amount_raw / 10 ^ erc20.decimals AS token_amount,
-        -- :todo: get pool name using `labels` functionality
+        labels.get(pool_address, 'lp_pool_name'),
         project,
         version,
         category,
@@ -71,22 +69,19 @@ rows AS (
         token_index,
         token_pool_percentage
     FROM (
-        -- Uniswap v2
+        -- Uniswap v3
         SELECT
             d.day,
             'Uniswap' AS project,
-            '2' AS version,
+            '3' AS version,
             'DEX' AS category,
             balances.amount_raw AS token_amount_raw,
             balances.token_address,
             balances.wallet_address AS pool_address,
             balances.token_index,
-            0.5 AS token_pool_percentage -- :todo: :research: is this always 0.5 for uniswap_v2 ?
+            0.5 AS token_pool_percentage
         FROM balances
         INNER JOIN days d ON balances.day <= d.day AND d.day < balances.next_day
-        WHERE balances.wallet_address NOT IN (
-            '\xed9c854cb02de75ce4c9bba992828d6cb7fd5c71', -- remove WETH-UBOMB wash trading pair
-            '\x854373387e41371ac6e307a1f29603c6fa10d872' ) -- remove FEG/ETH token pair
     ) dexs
     LEFT JOIN erc20.tokens erc20 on erc20.contract_address = dexs.token_address
     LEFT JOIN prices.usd p on p.contract_address = dexs.token_address and p.minute = dexs.day
@@ -99,67 +94,25 @@ RETURN r;
 END
 $function$;
 
--- Uniswap V2 contract deployed on '2020-05-04'
--- fill 2020 - Q2 + Q3
-SELECT dex.insert_liquidity_uniswap_v2(
-    '2020-05-04',
-    '2020-10-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2020-05-04'
-    AND day < '2020-10-01'
-    AND project = 'Uniswap'
-    AND version = '2'
-);
-
--- fill 2020 - Q4
-SELECT dex.insert_liquidity_uniswap_v2(
-    '2020-10-01',
-    '2021-01-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2020-10-01'
-    AND day < '2021-01-01'
-    AND project = 'Uniswap'
-    AND version = '2'
-);
-
--- fill 2021 - Q1
-SELECT dex.insert_liquidity_uniswap_v2(
-    '2021-01-01',
-    '2021-04-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2021-01-01'
-    AND day < '2021-04-01'
-    AND project = 'Uniswap'
-    AND version = '2'
-);
-
--- fill 2021 Q2 + Q3
-SELECT dex.insert_liquidity_uniswap_v2(
-    '2021-04-01',
+-- Uniswap v3 contract deployed on '2021-05-04'
+-- fill 2021 YTD
+SELECT dex.insert_liquidity_uniswap_v3(
+    '2021-05-04',
     now()
 )
 WHERE NOT EXISTS (
     SELECT *
     FROM dex.liquidity
-    WHERE day >= '2021-04-01'
+    WHERE day >= '2021-05-04'
     AND day < now() - interval '20 minutes'
     AND project = 'Uniswap'
-    AND version = '2'
+    AND version = '3'
 );
 
 INSERT INTO cron.job (schedule, command)
-VALUES ('*/10 * * * *', $$ -- :todo:
-    SELECT dex.insert_liquidity_uniswap_v2(
-        (SELECT max(day) - interval '3 days' FROM dex.liquidity WHERE project = 'Uniswap' and version = '2'),
+VALUES ('43 3 * * *', $$
+    SELECT dex.insert_liquidity_uniswap_v3(
+        (SELECT max(day) - interval '3 days' FROM dex.liquidity WHERE project = 'Uniswap' and version = '3'),
         (SELECT now() - interval '20 minutes');
 $$)
 ON CONFLICT (command) DO UPDATE SET schedule=EXCLUDED.schedule;
