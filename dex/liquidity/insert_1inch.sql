@@ -1,9 +1,9 @@
-CREATE OR REPLACE FUNCTION dex.insert_liquidity_1inch(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
+CREATE OR REPLACE FUNCTION dex.insert_liquidity_1inch_v1(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
 LANGUAGE plpgsql AS $function$
 DECLARE r integer;
 BEGIN
 WITH days as ( 
-    SELECT day FROM generate_series(timestamp with time zone start_ts, end_ts, '1 day') g(day) -- see https://duneanalytics.com/queries/81692
+    SELECT day FROM generate_series(start_ts, (SELECT end_ts - interval '1 day'), '1 day') g(day)
 ),
 dex_all_versions AS (
     SELECT
@@ -30,7 +30,16 @@ dex_wallet_balances AS (
         END AS token_index
     FROM erc20.token_balances balances
     INNER JOIN dex_all_versions dex ON (balances.token_address = dex.token1 OR balances.token_address = dex.token2) AND dex.mooniswap = balances.wallet_address
--- :todo: needs work   WHERE EXISTS (SELECT * FROM onelp."Mooniswap_evt_Swapped" swap WHERE swap.evt_block_time > now() - interval '1week' AND balances.wallet_address = swap.contract_address)
+    WHERE balances.timestamp >= start_ts AND balances.timestamp < end_ts
+    UNION ALL
+    SELECT
+        pool_address,
+        token_address,
+        token_amount_raw,
+        liq.day,
+        token_index
+    FROM dex.liquidity liq
+    WHERE project = '1inch' AND version = '1' AND liq.day >= start_ts - interval '3 days'
 ),
 balances AS (
     SELECT
@@ -62,7 +71,7 @@ rows AS (
         day,
         erc20.symbol AS token_symbol,
         token_amount_raw / 10 ^ erc20.decimals AS token_amount,
-        -- :todo: get pool name using `labels` functionality
+        labels.get(pool_address, 'lp_pool_name'),
         project,
         version,
         category,
@@ -83,7 +92,7 @@ rows AS (
             balances.token_address,
             balances.wallet_address AS pool_address,
             balances.token_index,
-            0.5 AS token_pool_percentage -- :todo: :research: is this always 0.5 for 1inch ?
+            0.5 AS token_pool_percentage
         FROM balances
         INNER JOIN days d ON balances.day <= d.day AND d.day < balances.next_day
     ) dexs
@@ -98,36 +107,39 @@ RETURN r;
 END
 $function$;
 
--- fill 2020
-SELECT dex.insert_liquidity_1inch(
-    '2020-01-01',
-    '2021-01-01'
+-- 1inch v1 launch in December 2020
+-- fill 2021 Q1
+SELECT dex.insert_liquidity_1inch_v1(
+    '2020-12-01',
+    '2021-04-01'
 )
 WHERE NOT EXISTS (
     SELECT *
     FROM dex.liquidity
-    WHERE day > '2020-01-01'
-    AND day <= '2021-01-01'
+    WHERE day >= '2020-12-01'
+    AND day < '2021-04-01'
     AND project = '1inch'
+    AND version = '1'
 );
 
--- fill 2021
-SELECT dex.insert_liquidity_1inch(
-    '2021-01-01',
+-- fill 2021 Q2 + Q3
+SELECT dex.insert_liquidity_1inch_v1(
+    '2021-04-01',
     now()
 )
 WHERE NOT EXISTS (
     SELECT *
     FROM dex.liquidity
-    WHERE day > '2021-01-01'
-    AND day <= now() - interval '20 minutes'
+    WHERE day >= '2021-04-01'
+    AND day < now() - interval '20 minutes'
     AND project = '1inch'
+    AND version = '1'
 );
 
 INSERT INTO cron.job (schedule, command)
-VALUES ('*/10 * * * *', $$
-    SELECT dex.insert_liquidity_1inch(
-        (SELECT max(day) - interval '1 days' FROM dex.liquidity WHERE project='1inch'),
+VALUES ('41 3 * * *', $$
+    SELECT dex.insert_liquidity_1inch_v1(
+        (SELECT max(day) - interval '3 days' FROM dex.liquidity WHERE project = '1inch' and version = '1'),
         (SELECT now() - interval '20 minutes');
 $$)
 ON CONFLICT (command) DO UPDATE SET schedule=EXCLUDED.schedule;
