@@ -1,20 +1,22 @@
-CREATE OR REPLACE FUNCTION dex.insert_liquidity_curve(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
+CREATE OR REPLACE FUNCTION dex.insert_liquidity_balancer_v1(start_ts timestamptz, end_ts timestamptz=now()) RETURNS integer
 LANGUAGE plpgsql AS $function$
 DECLARE r integer;
 BEGIN
-WITH days AS ( 
+WITH days as ( 
     SELECT day FROM generate_series(start_ts, (SELECT end_ts - interval '1 day'), '1 day') g(day)
+), 
+pools_v1 AS (
+    SELECT pool
+    FROM balancer."BFactory_evt_LOG_NEW_POOL"
 ),
-curve_pool_tokens AS (
-    SELECT
-        DISTINCT exchange_contract_address AS pool,
-        token_a_address AS token
-    FROM curvefi.view_trades
-    UNION
-    SELECT
-        DISTINCT exchange_contract_address,
-        token_b_address
-    FROM curvefi.view_trades
+pools_tokens_v1 AS ( -- 15243 rows
+    SELECT DISTINCT
+    p.pool,
+    e.contract_address AS token
+    FROM erc20."ERC20_evt_Transfer" e
+    INNER JOIN pools_v1 p ON e."to" = p.pool
+    -- AND e.evt_block_time >= start_ts
+    -- AND e.evt_block_time < end_ts
 ),
 dex_wallet_balances AS (
     SELECT
@@ -22,9 +24,9 @@ dex_wallet_balances AS (
         balances.token_address,
         balances.amount_raw,
         balances.timestamp,
-        'token_x' AS token_index
+        'token_0' AS token_index
     FROM erc20.token_balances balances
-    INNER JOIN curve_pool_tokens c ON balances.token_address = c.token AND balances.wallet_address = c.pool
+    INNER JOIN pools_tokens_v1 dex ON balances.token_address = dex.token AND balances.wallet_address = dex.pool
     WHERE balances.timestamp >= start_ts AND balances.timestamp < end_ts
     UNION ALL
     SELECT
@@ -34,7 +36,7 @@ dex_wallet_balances AS (
         liq.day,
         token_index
     FROM dex.liquidity liq
-    WHERE project = 'Curve' AND version = '1' AND liq.day >= start_ts - interval '3 days'
+    WHERE project = 'Balancer' AND version = '1' AND liq.day >= start_ts - interval '3 days'
 ),
 balances AS (
     SELECT
@@ -68,7 +70,7 @@ rows AS (
         token_amount_raw / 10 ^ erc20.decimals AS token_amount,
         labels.get(pool_address, 'lp_pool_name'),
         project,
-        version, -- :todo:
+        version,
         category,
         token_amount_raw,
         token_amount_raw / 10 ^ erc20.decimals * p.price AS usd_amount,
@@ -77,17 +79,17 @@ rows AS (
         token_index,
         token_pool_percentage
     FROM (
-        -- Curve v1
+        -- Balancer v1
         SELECT
             d.day,
-            'Curve' AS project,
+            'Balancer' AS project,
             '1' AS version,
             'DEX' AS category,
             balances.amount_raw AS token_amount_raw,
             balances.token_address,
             balances.wallet_address AS pool_address,
             balances.token_index,
-            0.5 AS token_pool_percentage
+            NULL::NUMERIC AS token_pool_percentage
         FROM balances
         INNER JOIN days d ON balances.day <= d.day AND d.day < balances.next_day
     ) dexs
@@ -102,66 +104,9 @@ RETURN r;
 END
 $function$;
 
--- :todo: adapt fills
--- Curve v1 contract deployed on '2018-11-02'
--- fill 2018 Q4 + 2019 Q1
-SELECT dex.insert_liquidity_curve(
-    '2018-11-02',
-    '2019-04-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2018-11-02'
-    AND day < '2019-04-01'
-    AND project = 'Curve'
-    AND version = '1'
-);
-
--- fill 2019 Q2
-SELECT dex.insert_liquidity_curve(
-    '2019-04-01',
-    '2019-07-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2019-04-01'
-    AND day < '2019-07-01'
-    AND project = 'Curve'
-    AND version = '1'
-);
-
--- fill 2019 Q3
-SELECT dex.insert_liquidity_curve(
-    '2019-07-01',
-    '2019-10-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2019-07-01'
-    AND day < '2019-10-01'
-    AND project = 'Curve'
-    AND version = '1'
-);
-
--- fill 2019 - Q4
-SELECT dex.insert_liquidity_curve(
-    '2019-10-01',
-    '2020-01-01'
-)
-WHERE NOT EXISTS (
-    SELECT *
-    FROM dex.liquidity
-    WHERE day >= '2019-10-01'
-    AND day < '2020-01-01'
-    AND project = 'Curve'
-    AND version = '1'
-);
-
+-- Balancer v1 contract deployed on '2020-02-27'
 -- fill 2020 - Q1
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2020-01-01',
     '2020-04-01'
 )
@@ -170,12 +115,12 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2020-01-01'
     AND day < '2020-04-01'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 -- fill 2020 - Q2
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2020-04-01',
     '2020-07-01'
 )
@@ -184,12 +129,12 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2020-04-01'
     AND day < '2020-07-01'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 -- fill 2020 - Q3
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2020-07-01',
     '2020-10-01'
 )
@@ -198,12 +143,12 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2020-07-01'
     AND day < '2020-10-01'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 -- fill 2020 - Q4
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2020-10-01',
     '2021-01-01'
 )
@@ -212,12 +157,12 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2020-10-01'
     AND day < '2021-01-01'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 -- fill 2021 - Q1
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2021-01-01',
     '2021-04-01'
 )
@@ -226,12 +171,12 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2021-01-01'
     AND day < '2021-04-01'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 -- fill 2021 Q2 + Q3
-SELECT dex.insert_liquidity_curve(
+SELECT dex.insert_liquidity_balancer_v1(
     '2021-04-01',
     now()
 )
@@ -240,14 +185,14 @@ WHERE NOT EXISTS (
     FROM dex.liquidity
     WHERE day >= '2021-04-01'
     AND day < now() - interval '20 minutes'
-    AND project = 'Curve'
+    AND project = 'Balancer'
     AND version = '1'
 );
 
 INSERT INTO cron.job (schedule, command)
 VALUES ('41 3 * * *', $$
-    SELECT dex.insert_liquidity_curve(
-        (SELECT max(day) - interval '3 days' FROM dex.liquidity WHERE project = 'Curve' and version = '1'),
+    SELECT dex.insert_liquidity_balancer_v1(
+        (SELECT max(day) - interval '3 days' FROM dex.liquidity WHERE project = 'Balancer' and version = '1'),
         (SELECT now() - interval '20 minutes');
 $$)
 ON CONFLICT (command) DO UPDATE SET schedule=EXCLUDED.schedule;
